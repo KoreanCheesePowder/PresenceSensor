@@ -1,0 +1,18 @@
+zigbeeManufacturer:
+  - id: "HOBEIAN/ZG-204ZX"
+    deviceLabel: C.P Tuya Presence Sensor
+    manufacturer: HOBEIAN
+    model: ZG-204ZX
+    deviceProfileName: cp-tuya-presence-v122
+zigbeeGeneric:
+  - id: "cp/tuya-presence-env-test"
+    deviceLabel: C.P Tuya Presence Sensor
+    zigbeeProfiles:
+      - 0x0104
+    clusters:
+      server:
+        - 0x0400
+        - 0x0402
+        - 0x0405
+        - 0xEF00
+    deviceProfileName: cp-tuya-presence-v122

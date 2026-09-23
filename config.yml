@@ -1,0 +1,4 @@
+name: C.P Tuya Presence Sensor
+packageKey: cheesepowder.tuya-presence-test
+permissions:
+  zigbee: {}

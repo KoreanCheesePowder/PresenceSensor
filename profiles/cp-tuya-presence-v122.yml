@@ -1,0 +1,124 @@
+name: cp-tuya-presence-v122
+components:
+  - id: main
+    capabilities:
+      - id: presenceSensor
+        version: 1
+      - id: illuminanceMeasurement
+        version: 1
+      - id: temperatureMeasurement
+        version: 1
+      - id: relativeHumidityMeasurement
+        version: 1
+      - id: battery
+        version: 1
+      - id: refresh
+        version: 1
+      - id: buildbook37604.driverInformation
+        version: 1
+    categories:
+      - name: PresenceSensor
+
+preferences:
+  - name: zgTemperatureUnit
+    title: 온도 단위
+    description: 센서 표시 온도 단위를 설정합니다.
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        "C": "섭씨 (°C)"
+        "F": "화씨 (°F)"
+      default: "C"
+
+  - name: zgTemperatureCalibration
+    title: 온도 보정
+    description: -2.0 ~ +2.0°C
+    required: false
+    preferenceType: number
+    definition:
+      minimum: -2.0
+      maximum: 2.0
+      default: 0.0
+
+  - name: zgHumidityCalibration
+    title: 습도 보정
+    description: -30 ~ +30%
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: -30
+      maximum: 30
+      default: 0
+
+  - name: zgFadingTime
+    title: 재실 유지시간
+    description: 재실 감지 후 부재로 전환하기까지 유지시간(초)
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 28800
+      default: 60
+
+  - name: zgIndicator
+    title: LED 표시기
+    description: 센서 LED 표시 기능
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        "ON": "켜기"
+        "OFF": "끄기"
+      default: "OFF"
+
+  - name: zgIlluminanceInterval
+    title: 조도 측정 주기
+    description: 재실 상태에서 조도 샘플링/갱신 주기(분)
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 1
+      maximum: 720
+      default: 1
+
+  - name: zgDetectionDistance
+    title: 감지 거리
+    description: 0.0 ~ 5.0m
+    required: false
+    preferenceType: number
+    definition:
+      minimum: 0.0
+      maximum: 5.0
+      default: 2.0
+
+  - name: zgMotionSensitivity
+    title: 동적 감지 민감도
+    description: 움직이는 대상 감도, 0~10
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 10
+      default: 5
+
+  - name: zgStaticSensitivity
+    title: 정적 감지 민감도
+    description: 정지/미세 움직임 대상 감도, 0~10
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 10
+      default: 3
+
+  - name: zgAntiInterference
+    title: 간섭 방지
+    description: 레이더 간섭 방지 기능
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        "ON": "켜기"
+        "OFF": "끄기"
+      default: "OFF"

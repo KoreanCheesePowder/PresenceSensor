@@ -1,19 +1,16 @@
-# C.P Tuya Presence Sensor v1.1.6
+# C.P Tuya Presence Sensor v1.2.4
 
-Target: HOBEIAN ZG-204ZX
+SmartThings Edge driver supporting **two independent device variants**:
 
-This build keeps the v1.1.4 UI and settings structure and adds read-only diagnostics for the sensor's current Tuya settings.
+- **HOBEIAN / ZG-204ZX**: original v1.2.2 profile, environmental readings and settings are preserved unchanged.
+- **_TZE200_ka8l86iu / TS0601**: TYPE6 / ZG-204ZP-type battery mmWave sensor; presence, standard motion (mirrors presence), battery, refresh and its own settings.
 
-On startup, configure, and manual refresh the driver sends Tuya EF00 DataQuery (0x03). If the device returns the values, logcat prints them with `ZG204ZX SETTINGS`, including:
-- static sensitivity (DP 2)
-- detection distance (DP 4)
-- fading time (DP 102)
-- anti-interference (DP 103)
-- humidity calibration (DP 104)
-- temperature calibration (DP 105)
-- illuminance interval (DP 107)
-- indicator (DP 108)
-- temperature unit (DP 109)
-- motion sensitivity (DP 123)
+The packageKey is unchanged (`cheesepowder.tuya-presence-test`), so v1.2.4 updates the previously installed driver rather than creating a new one. Existing device registration and routines should not need to be deleted.
 
-No settings are written by the query itself.
+TYPE6 detects presence from Tuya EF00 DP1 and IAS Zone (0x0500); battery is read from DP121 or standard Power Configuration. TYPE6 settings use DP2 / 4 / 102 / 107 / 122 / 123. The original model retains its own DP101-111 mapping.
+
+**TYPE6 motion note:** the `motionSensor` state follows the same detected/not-detected signal as the presenceSensor. It is not a separate classification of active movement vs. still presence.
+
+**Test status:** Device/DP fingerprints were verified against publicly documented deployments, and ZIP/YAML/Lua regression checks run locally. On-hub operation and the device's actual datapoint reports require a live user test.
+
+Detailed installation and functional checks: `docs/INSTALL-TYPE6.txt`.

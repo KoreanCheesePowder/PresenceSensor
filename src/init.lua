@@ -3,6 +3,7 @@ local ZigbeeDriver = require "st.zigbee"
 local defaults = require "st.zigbee.defaults"
 local clusters = require "st.zigbee.zcl.clusters"
 local device_management = require "st.zigbee.device_management"
+local data_types = require "st.zigbee.data_types"
 local log = require "log"
 local tuya = require "tuya_utils"
 
@@ -11,18 +12,25 @@ local RelativeHumidity = clusters.RelativeHumidity
 local IlluminanceMeasurement = clusters.IlluminanceMeasurement
 local PowerConfiguration = clusters.PowerConfiguration
 local OccupancySensing = clusters.OccupancySensing
+local IASZone = clusters.IASZone
+
+-- IAS Zone direction tables differ among Edge SDK builds. Register incoming
+-- server->client commands by their ZCL command IDs (same in both layouts).
+local IAS_ZONE_STATUS_CHANGE_NOTIFICATION = 0x00
+local IAS_ZONE_ENROLL_REQUEST = 0x01
 
 local TUYA_CLUSTER = 0xEF00
 local TUYA_REPORT_COMMAND = 0x02
 local TUYA_REPORT_COMMAND_ALT = 0x01
 
 local DRIVER_NAME = "C.P Tuya Presence Sensor"
-local DRIVER_VERSION = "v1.2.2"
+local DRIVER_VERSION = "v1.2.4"
 local DRIVER_AUTHOR = "치즈가루"
 
 local driver_info = capabilities["buildbook37604.driverInformation"]
 local send_reads
 local PROFILE_V122 = "cp-tuya-presence-v122"
+local PROFILE_TYPE6 = "cp-tuya-presence-type6-v124"
 
 local DP = {
   PRESENCE = 1,
@@ -40,6 +48,24 @@ local DP = {
   BATTERY = 110,
   TEMPERATURE = 111,
   MOTION_SENSITIVITY = 123,
+}
+
+-- Keep ZG-204ZX processing and settings unchanged. TYPE6 has its own
+-- fingerprint/profile/DP map and must not inherit environmental handlers.
+local function is_type6_device(device)
+  return device:get_model() == "TS0601" and
+    device:get_manufacturer() == "_TZE200_ka8l86iu"
+end
+
+local TYPE6_DP = {
+  PRESENCE = 1,              -- Enum: 0=not present, other values=present
+  STATIC_SENSITIVITY = 2,   -- Value
+  DETECTION_DISTANCE = 4,   -- Value: cm
+  FADING_TIME = 102,        -- Value: seconds
+  INDICATOR = 107,          -- Bool
+  BATTERY = 121,            -- Value: percent
+  ANTI_INTERFERENCE = 122,  -- Bool
+  MOTION_SENSITIVITY = 123, -- Value
 }
 
 local function info_metadata()
@@ -111,6 +137,42 @@ end
 local function write_enum(device, dp, value, label)
   log.info(string.format("TUYA SET %s dp=0x%02X value=%s", label, dp, tostring(value)))
   tuya.send(device, dp, tuya.TYPE_ENUM, tuya.u8(value))
+end
+
+local function emit_type6_presence(device, active, source)
+  device:emit_event(active and capabilities.presenceSensor.presence.present()
+    or capabilities.presenceSensor.presence.not_present())
+  -- TYPE6 does not independently classify stationary presence vs. movement.
+  -- The standard motion capability mirrors the same occupancy indication.
+  device:emit_event(active and capabilities.motionSensor.motion.active()
+    or capabilities.motionSensor.motion.inactive())
+  log.info(string.format("TYPE6 %s presence=%s motion=%s", source,
+    active and "present" or "not_present", active and "active" or "inactive"))
+end
+
+local function apply_type6_dp(device, dp, dp_type, data_len, value, raw_segment)
+  log.info(string.format("TYPE6 EF00 dp=0x%02X type=0x%02X len=%d value=%s raw=%s",
+    dp or 0, dp_type or 0, data_len or 0, tostring(value), raw_segment or ""))
+  if value == nil or data_len == 0 or data_len > 4 then return end
+  if dp == TYPE6_DP.PRESENCE then
+    emit_type6_presence(device, value ~= 0, "DP1")
+  elseif dp == TYPE6_DP.BATTERY then
+    local pct = clamp(value, 0, 100)
+    device:emit_event(capabilities.battery.battery(pct))
+    log.info(string.format("TYPE6 battery=%d%% (DP121)", pct))
+  elseif dp == TYPE6_DP.DETECTION_DISTANCE then
+    log.info(string.format("TYPE6 SETTINGS distance=%.2f m", value / 100))
+  elseif dp == TYPE6_DP.FADING_TIME then
+    log.info(string.format("TYPE6 SETTINGS fadingTime=%d s", value))
+  elseif dp == TYPE6_DP.STATIC_SENSITIVITY then
+    log.info(string.format("TYPE6 SETTINGS staticSensitivity=%d", value))
+  elseif dp == TYPE6_DP.MOTION_SENSITIVITY then
+    log.info(string.format("TYPE6 SETTINGS motionSensitivity=%d", value))
+  elseif dp == TYPE6_DP.INDICATOR then
+    log.info(string.format("TYPE6 SETTINGS indicatorRaw=%d", value))
+  elseif dp == TYPE6_DP.ANTI_INTERFERENCE then
+    log.info(string.format("TYPE6 SETTINGS antiInterferenceRaw=%d", value))
+  end
 end
 
 local function log_and_apply_tuya_dp(device, dp, dp_type, data_len, value, raw_segment)
@@ -203,7 +265,11 @@ local function tuya_ef00_handler(driver, device, zb_rx)
 
     local value = data_len > 0 and parse_unsigned_be(body, data_first, data_len) or nil
     local raw_segment = bytes_to_hex(string.sub(body, pos, data_last))
-    log_and_apply_tuya_dp(device, dp, dp_type, data_len, value, raw_segment)
+    if is_type6_device(device) then
+      apply_type6_dp(device, dp, dp_type, data_len, value, raw_segment)
+    else
+      log_and_apply_tuya_dp(device, dp, dp_type, data_len, value, raw_segment)
+    end
     parsed = parsed + 1
     pos = data_last + 1
   end
@@ -272,7 +338,101 @@ local function bind_standard_clusters(driver, device)
 end
 
 
+-- Only TYPE6 receives IAS Zone commissioning and reads. Existing ZG-204ZX
+-- has no IASZone support and must not be sent TYPE6 commands.
+local function type6_ias_enroll(driver, device)
+  local hub_eui = driver.environment_info and driver.environment_info.hub_zigbee_eui
+  if not hub_eui then
+    log.warn("TYPE6 IAS CIE address unavailable; enrollment will be retried on configure")
+    return
+  end
+  device:send(IASZone.attributes.IASCIEAddress:write(device, data_types.IeeeAddress(hub_eui)))
+  log.info("TYPE6 IASZone CIE address write requested")
+end
+
+local function type6_zone_enroll_request(driver, device, zb_rx)
+  if not is_type6_device(device) then return end
+  -- The outgoing command may be nested under commands.client or client.commands
+  -- depending on the loaded Edge SDK. Never take down the whole driver if it
+  -- is absent: TYPE6 can still report its occupancy through Tuya EF00 DP1.
+  local response_cmd =
+    (IASZone.commands and IASZone.commands.client and IASZone.commands.client.ZoneEnrollResponse) or
+    (IASZone.client and IASZone.client.commands and IASZone.client.commands.ZoneEnrollResponse)
+  local response_type = IASZone.types and IASZone.types.EnrollResponseCode
+  if response_cmd == nil or response_type == nil then
+    log.warn("TYPE6 IASZone ZoneEnrollResponse API unavailable; relying on EF00 DP1")
+    return
+  end
+  local ok, response = pcall(response_cmd, device, response_type(0), data_types.Uint8(0))
+  if not ok then
+    log.warn("TYPE6 IASZone ZoneEnrollResponse could not be built: " .. tostring(response))
+    return
+  end
+  device:send(response)
+  log.info("TYPE6 IASZone ZoneEnrollResponse: SUCCESS, zone_id=0")
+end
+
+local function type6_status_update(device, raw, label)
+  if type(raw) ~= "number" then
+    log.warn("TYPE6 IAS ZoneStatus not numeric: " .. tostring(raw))
+    return
+  end
+  local active = (raw & 0x01) ~= 0
+  log.info(string.format("TYPE6 IASZone %s status=0x%04X", label, raw))
+  emit_type6_presence(device, active, label)
+end
+
+local function type6_zone_notification(driver, device, zb_rx)
+  if not is_type6_device(device) then return end
+  -- Parsed ZoneStatusChangeNotification is exposed as zb_rx.body.zone_status
+  -- on some SDK builds; others put it in body.zcl_body.zone_status.
+  local msg_body = zb_rx and zb_rx.body
+  local zbbody = msg_body and msg_body.zcl_body
+  local zone = (msg_body and msg_body.zone_status) or (zbbody and zbbody.zone_status)
+  local raw = type(zone) == "table" and zone.value or zone
+  if type(raw) ~= "number" then
+    local bytes = zbbody and zbbody.body_bytes
+    if type(bytes) == "string" and #bytes >= 2 then
+      raw = bytes:byte(1) + bytes:byte(2) * 256
+    end
+  end
+  if type(raw) == "number" then
+    type6_status_update(device, raw, "notification")
+  else
+    log.warn("TYPE6 IAS ZoneStatus notification without usable value")
+  end
+end
+
+local function type6_zone_attribute(driver, device, value, zb_rx)
+  if not is_type6_device(device) then return end
+  type6_status_update(device, value and value.value, "attribute")
+end
+
+local function type6_send_reads(device)
+  device:send(IASZone.attributes.ZoneStatus:read(device))
+  if PowerConfiguration and PowerConfiguration.attributes.BatteryPercentageRemaining then
+    device:send(PowerConfiguration.attributes.BatteryPercentageRemaining:read(device))
+  end
+end
+
+local function type6_query(device)
+  log.info("TYPE6 SETTINGS QUERY: Tuya EF00 DataQuery 0x03")
+  tuya.query_all(device)
+end
+
+local function type6_read_and_query(device)
+  type6_send_reads(device)
+  device.thread:call_with_delay(0.8, function() type6_query(device) end)
+end
+
 local function added_handler(driver, device)
+  if is_type6_device(device) then
+    emit_type6_presence(device, false, "added")
+    emit_driver_information(device)
+    type6_ias_enroll(driver, device)
+    device.thread:call_with_delay(1.0, function() type6_read_and_query(device) end)
+    return
+  end
   device:emit_event(capabilities.presenceSensor.presence.not_present())
   emit_driver_information(device)
   bind_standard_clusters(driver, device)
@@ -281,6 +441,14 @@ local function added_handler(driver, device)
 end
 
 local function init_handler(driver, device)
+  if is_type6_device(device) then
+    log.info("TYPE6 initializing with profile " .. PROFILE_TYPE6)
+    device:try_update_metadata({profile = PROFILE_TYPE6})
+    emit_driver_information(device)
+    type6_ias_enroll(driver, device)
+    device.thread:call_with_delay(0.8, function() type6_read_and_query(device) end)
+    return
+  end
   log.info("Ensuring device profile is " .. PROFILE_V122)
   device:try_update_metadata({profile = PROFILE_V122})
   emit_driver_information(device)
@@ -289,6 +457,13 @@ local function init_handler(driver, device)
 end
 
 local function do_configure_handler(driver, device)
+  if is_type6_device(device) then
+    type6_ias_enroll(driver, device)
+    type6_send_reads(device)
+    device.thread:call_with_delay(1.0, function() type6_query(device) end)
+    emit_driver_information(device)
+    return
+  end
   bind_standard_clusters(driver, device)
   send_reads(device)
   device.thread:call_with_delay(1, function() query_tuya_settings(device) end)
@@ -299,15 +474,50 @@ local function changed(old, new)
   return new ~= nil and tostring(old) ~= tostring(new)
 end
 
+local function type6_changed(old, new)
+  -- No automatic rewrite of profile defaults on adoption/driver switch.
+  return old ~= nil and new ~= nil and tostring(old) ~= tostring(new)
+end
+
+local function type6_info_changed(device, old, p)
+  if type6_changed(old.type6FadingTime, p.type6FadingTime) then
+    write_value(device, TYPE6_DP.FADING_TIME, tonumber(p.type6FadingTime), "TYPE6 fadingTime")
+  end
+  if type6_changed(old.type6DetectionDistance, p.type6DetectionDistance) then
+    write_value(device, TYPE6_DP.DETECTION_DISTANCE,
+      math.floor(tonumber(p.type6DetectionDistance) * 100 + 0.5), "TYPE6 detectionDistance")
+  end
+  if type6_changed(old.type6StaticSensitivity, p.type6StaticSensitivity) then
+    write_value(device, TYPE6_DP.STATIC_SENSITIVITY,
+      tonumber(p.type6StaticSensitivity), "TYPE6 staticSensitivity")
+  end
+  if type6_changed(old.type6MotionSensitivity, p.type6MotionSensitivity) then
+    write_value(device, TYPE6_DP.MOTION_SENSITIVITY,
+      tonumber(p.type6MotionSensitivity), "TYPE6 motionSensitivity")
+  end
+  if type6_changed(old.type6Indicator, p.type6Indicator) then
+    write_bool_direct(device, TYPE6_DP.INDICATOR, p.type6Indicator == "ON", "TYPE6 indicator")
+  end
+  if type6_changed(old.type6AntiInterference, p.type6AntiInterference) then
+    write_bool_direct(device, TYPE6_DP.ANTI_INTERFERENCE,
+      p.type6AntiInterference == "ON", "TYPE6 antiInterference")
+  end
+end
+
 local function info_changed_handler(driver, device, event, args)
   log.info("SmartThings Settings infoChanged received")
   local old = {}
   if args and args.old_st_store and args.old_st_store.preferences then
     old = args.old_st_store.preferences
   end
-  local p = device.preferences or {}
+local p = device.preferences or {}
+if is_type6_device(device) then
+  type6_info_changed(device, old, p)
+  emit_driver_information(device)
+  return
+end
 
-  if changed(old.zgTemperatureUnit, p.zgTemperatureUnit) then
+if changed(old.zgTemperatureUnit, p.zgTemperatureUnit) then
     log.info(string.format("SETTINGS changed zgTemperatureUnit: %s -> %s", tostring(old.zgTemperatureUnit), tostring(p.zgTemperatureUnit)))
     write_enum(device, DP.TEMPERATURE_UNIT, p.zgTemperatureUnit == "F" and 1 or 0, "temperatureUnit")
   end
@@ -352,6 +562,12 @@ local function info_changed_handler(driver, device, event, args)
 end
 
 local function refresh_handler(driver, device, command)
+  if is_type6_device(device) then
+    log.info("TYPE6 Manual refresh requested")
+    type6_read_and_query(device)
+    emit_driver_information(device)
+    return
+  end
   log.info("Manual refresh requested")
   send_reads(device)
   device.thread:call_with_delay(0.8, function() query_tuya_settings(device) end)
@@ -362,6 +578,7 @@ local driver_template = {
   health_check = false,
   supported_capabilities = {
     capabilities.presenceSensor,
+    capabilities.motionSensor,
     capabilities.illuminanceMeasurement,
     capabilities.temperatureMeasurement,
     capabilities.relativeHumidityMeasurement,
@@ -373,7 +590,15 @@ local driver_template = {
     added = added_handler,
     init = init_handler,
     doConfigure = do_configure_handler,
-    infoChanged = info_changed_handler
+    infoChanged = info_changed_handler,
+    driverSwitched = function(driver, device)
+      if is_type6_device(device) then
+        log.info("TYPE6 driver switched: selecting TYPE6 profile and re-enrolling IASZone")
+        device:try_update_metadata({profile = PROFILE_TYPE6})
+        type6_ias_enroll(driver, device)
+        device.thread:call_with_delay(1.0, function() type6_read_and_query(device) end)
+      end
+    end
   },
   capability_handlers = {
     [capabilities.refresh.ID] = {
@@ -393,9 +618,16 @@ local driver_template = {
       },
       [OccupancySensing.ID] = {
         [OccupancySensing.attributes.Occupancy.ID] = occupancy_handler
+      },
+      [IASZone.ID] = {
+        [IASZone.attributes.ZoneStatus.ID] = type6_zone_attribute
       }
     },
     cluster = {
+      [IASZone.ID] = {
+        [IAS_ZONE_STATUS_CHANGE_NOTIFICATION] = type6_zone_notification,
+        [IAS_ZONE_ENROLL_REQUEST] = type6_zone_enroll_request
+      },
       [TUYA_CLUSTER] = {
         [TUYA_REPORT_COMMAND] = tuya_ef00_handler,
         [TUYA_REPORT_COMMAND_ALT] = tuya_ef00_handler

@@ -122,7 +122,7 @@ assert_eq(d:get_latest_state('main','buildbook37604.type6communication','linkSta
 assert_eq(d:get_latest_state('main','buildbook37604.driverInformation','author'),'치즈가루','TYPE6 author isolated')
 assert_eq(d:get_field('type6.health.monitor_started'),epoch,'monitor baseline')
 assert_eq(#d.timers,1,'one periodic timer')
-assert_eq(d:get_latest_state('main','buildbook37604.driverInformation','driverVersion'),'v1.3.1','driver version')
+assert_eq(d:get_latest_state('main','buildbook37604.driverInformation','driverVersion'),'v1.3.2','driver version')
 -- Profile switching may be asynchronous. Suppress new custom-capability
 -- events until SmartThings reports the new TYPE6 profile as applied.
 local pending = mk_type6({type6CommTimeout=60})
@@ -207,7 +207,7 @@ assert_eq(#old.timers,0,'legacy has no watchdog')
 local old_dp1=string.char(0,1,1,4,0,1,1)
 captured.zigbee_handlers.cluster[0xEF00][0x02](hub,old,{body={zcl_body={body_bytes=old_dp1}}})
 assert_eq(old:get_latest_state('main','presenceSensor','presence'),'present','legacy DP handler still handles presence')
-assert_eq(old:get_latest_state('main','buildbook37604.driverInformation','driverVersion'),'v1.3.1','legacy info version')
+assert_eq(old:get_latest_state('main','buildbook37604.driverInformation','driverVersion'),'v1.3.2','legacy info version')
 assert(old:get_latest_state('main','buildbook37604.driverInformation','author')=='치즈가루','legacy author stays unchanged')
 -- Removal cleans timer.
 captured.lifecycle_handlers.removed(hub,d2)

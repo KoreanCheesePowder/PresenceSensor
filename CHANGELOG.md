@@ -1,6 +1,20 @@
+## v1.3.2 AUTO (installer-only, 2026-10-20)
+- Double-click SETUP-AND-INSTALL.cmd; no manual CLI commands.
+- Use SmartThings CLI 2.1.2 compatible --channel + --hub without --install.
+- Auto-verify installed driver UUID, optionally inspect sensor version state.
+- Save automatic installation results to INSTALL-RESULT.txt on the PC.
+- Keep exactly the same Lua/profile/capability/device logic as v1.3.2.
+
+## v1.3.2 - driver information version state refresh
+- 기존 ZG-204ZX 및 TYPE6의 제작자 정보는 '치즈가루'로 유지.
+- `driverVersion` 이벤트를 `state_change=true`로 강제 발행하고 전용 INFO 로그를 남김.
+- 기존 커스텀 Capability, 프로필, 지그비 DP 및 통신감시 로직 변경 없음.
+- 장치 삭제/재등록 없이 이전 packageKey와 driver ID로 재배포.
+- 실제 허브 설치 여부와 기기별 Capability 값은 설치 후 CLI에서 재확인 필요.
+
 # Changelog
 
-## v1.3.1 (2026-10-20)
+## v1.3.2 (2026-10-20)
 - Replace brittle PowerShell JSON-based installer with direct Windows CMD invocation of official SmartThings `edge:drivers:package --install --channel --hub` command.
 - Avoid native stdout UTF-8 mojibake and `ConvertFrom-Json` failures with Korean labels.
 - Do not recreate or re-query previously registered capability/presentation.

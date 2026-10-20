@@ -1,0 +1,12 @@
+C.P Tuya Presence Sensor v1.3.2 - one-click installer
+1. Extract this ZIP to a new folder on Windows.
+2. Double-click SETUP-AND-INSTALL.cmd.
+3. The installer automatically uploads the driver, assigns it to CheesePowder,
+   installs it on the existing main hub and checks the installed driver ID.
+4. The installer saves INSTALL-RESULT.txt in the extracted folder.
+5. No manual CLI command copy/paste, Hub/Channel selection, sensor re-pair,
+   capability creation or device/routine removal is required.
+6. SmartThings CLI must already be installed and authenticated.
+Note: The device version capability may synchronize later than hub installation.
+The script reports this separately instead of pretending it is fully verified.
+This installer is configured for the current user account/channel/main hub.

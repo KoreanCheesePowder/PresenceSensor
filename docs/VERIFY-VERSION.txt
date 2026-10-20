@@ -1,0 +1,13 @@
+C.P Tuya Presence Sensor v1.3.2 version verification
+
+In Windows CMD:
+  smartthings edge:drivers:installed --verbose
+  smartthings edge:drivers:logcat 7cd92d45-38da-4706-aa5d-f0443758e145
+  smartthings devices:capability-status DEVICE_UUID main buildbook37604.driverInformation -j
+
+Look for:
+  DRIVER VERSION published: v1.3.2
+  driverVersion.value: v1.3.2
+
+If installed timestamp is old and no new runtime log, the hub is still running the older package.
+Do not delete/re-pair existing sensors.

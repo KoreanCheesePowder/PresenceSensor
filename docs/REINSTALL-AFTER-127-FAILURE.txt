@@ -1,7 +1,0 @@
-C.P Tuya Presence Sensor v1.3.1 - existing account recovery
-
-Past v1.2.7 to v1.3.0 installers encountered duplicate capabilities, missing presentation, and corrupt Windows PowerShell JSON output. The latest log confirms the presentation query succeeded (returned a presentation document) before Windows PowerShell failed to parse the console text. No further capability creation is needed.
-
-Use SETUP-AND-INSTALL.cmd from this ZIP. It calls SmartThings CLI directly without PowerShell or response JSON processing. It does NOT delete/recreate any capability or presentation.
-
-Keep all existing devices and routines. If SmartThings CLI command itself fails, report its stdout/stderr and exit code.

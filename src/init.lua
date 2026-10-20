@@ -24,7 +24,7 @@ local TUYA_REPORT_COMMAND = 0x02
 local TUYA_REPORT_COMMAND_ALT = 0x01
 
 local DRIVER_NAME = "C.P Tuya Presence Sensor"
-local DRIVER_VERSION = "v1.3.1"
+local DRIVER_VERSION = "v1.3.2"
 local DRIVER_AUTHOR = "치즈가루"
 
 local driver_info = capabilities["buildbook37604.driverInformation"]
@@ -104,7 +104,11 @@ local function emit_driver_information(device)
     device:emit_event(driver_info.author(DRIVER_AUTHOR, info_metadata()))
   end
   if driver_info.driverVersion ~= nil then
-    device:emit_event(driver_info.driverVersion(DRIVER_VERSION, info_metadata()))
+    -- Publish a persistent, forced state change on each driver initialization,
+    -- refresh and settings update. Prior builds used ephemeral/non-archivable
+    -- state_change=false metadata and could leave the old version on screen.
+    device:emit_event(driver_info.driverVersion(DRIVER_VERSION, {state_change = true}))
+    log.info('DRIVER VERSION published: ' .. DRIVER_VERSION .. ' / ' .. tostring(device.label or device.id or 'unknown'))
   end
 end
 

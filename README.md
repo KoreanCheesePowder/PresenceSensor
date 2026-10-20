@@ -1,16 +1,19 @@
-# C.P Tuya Presence Sensor v1.2.4
+# C.P Tuya Presence Sensor v1.3.1
 
-SmartThings Edge driver supporting **two independent device variants**:
+- Supports existing ZG-204ZX (HOBEIAN) 3 devices and TYPE6 (TS0601 / `_TZE200_ka8l86iu`) 2 devices.
+- Retains existing packageKey, channel, hub, fingerprints, capability, profiles, and all sensor settings.
+- Manufacturer/author field: `치즈가루` only; TYPE6 communication status remains a separate custom capability.
 
-- **HOBEIAN / ZG-204ZX**: original v1.2.2 profile, environmental readings and settings are preserved unchanged.
-- **_TZE200_ka8l86iu / TS0601**: TYPE6 / ZG-204ZP-type battery mmWave sensor; presence, standard motion (mirrors presence), battery, refresh and its own settings.
+## Install / update (SmartThings CLI 2.1.2)
 
-The packageKey is unchanged (`cheesepowder.tuya-presence-test`), so v1.2.4 updates the previously installed driver rather than creating a new one. Existing device registration and routines should not need to be deleted.
+1. Extract this ZIP to a **fresh directory**.
+2. Run `SETUP-AND-INSTALL.cmd`. It runs the official `smartthings edge:drivers:package` update command directly.
+3. Confirm the displayed driver version `v1.3.1` on SmartThings and check `logcat` for device errors.
 
-TYPE6 detects presence from Tuya EF00 DP1 and IAS Zone (0x0500); battery is read from DP121 or standard Power Configuration. TYPE6 settings use DP2 / 4 / 102 / 107 / 122 / 123. The original model retains its own DP101-111 mapping.
+The prior v1.3.0 attempt **already registered** `buildbook37604.type6communication` and its presentation. This build does not create, delete, or read those resources through PowerShell. The installer deliberately has no PowerShell dependency and does not parse JSON.
 
-**TYPE6 motion note:** the `motionSensor` state follows the same detected/not-detected signal as the presenceSensor. It is not a separate classification of active movement vs. still presence.
+**Do not remove/re-pair devices or delete routines.** This update is specific to the user's existing account and is **not** an initial capability-creation installer for a new SmartThings account.
 
-**Test status:** Device/DP fingerprints were verified against publicly documented deployments, and ZIP/YAML/Lua regression checks run locally. On-hub operation and the device's actual datapoint reports require a live user test.
+## System Monitor
 
-Detailed installation and functional checks: `docs/INSTALL-TYPE6.txt`.
+`monitor/type6_monitor_adapter.py` and `monitor/type6_monitor_adapter.js` expose SmartThings communication states for integration. They are **not yet installed into the production System Monitor**; an operational System Monitor source ZIP is required to complete that integration.

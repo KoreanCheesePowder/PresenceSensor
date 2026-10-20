@@ -1,0 +1,53 @@
+{
+  "dashboard": {
+    "states": [],
+    "actions": [],
+    "basicPlus": []
+  },
+  "detailView": [
+    {
+      "label": "통신 상태",
+      "displayType": "state",
+      "state": {
+        "label": "{{linkState.value}}",
+        "alternatives": [
+          {
+            "key": "checking",
+            "value": "통신 확인 중",
+            "type": "inactive"
+          },
+          {
+            "key": "normal",
+            "value": "통신 정상",
+            "type": "active"
+          },
+          {
+            "key": "suspect",
+            "value": "통신 끊김 의심",
+            "type": "inactive"
+          }
+        ]
+      }
+    },
+    {
+      "label": "마지막 수신",
+      "displayType": "state",
+      "state": {
+        "label": "{{lastReceived.value}}"
+      }
+    },
+    {
+      "label": "무수신 경과",
+      "displayType": "state",
+      "state": {
+        "label": "{{minutesWithoutRx.value}}분 (판정 기준 {{timeoutMinutes.value}}분)"
+      }
+    }
+  ],
+  "automation": {
+    "conditions": [],
+    "actions": []
+  },
+  "id": "buildbook37604.type6communication",
+  "version": 1
+}

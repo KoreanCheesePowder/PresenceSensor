@@ -24,13 +24,27 @@ local TUYA_REPORT_COMMAND = 0x02
 local TUYA_REPORT_COMMAND_ALT = 0x01
 
 local DRIVER_NAME = "C.P Tuya Presence Sensor"
-local DRIVER_VERSION = "v1.2.4"
+local DRIVER_VERSION = "v1.3.1"
 local DRIVER_AUTHOR = "치즈가루"
 
 local driver_info = capabilities["buildbook37604.driverInformation"]
+-- Set at install time from the installing SmartThings account's capability namespace.
+local type6_link_capability = capabilities["buildbook37604.type6communication"]
 local send_reads
+local type6_query
 local PROFILE_V122 = "cp-tuya-presence-v122"
-local PROFILE_TYPE6 = "cp-tuya-presence-type6-v124"
+local PROFILE_TYPE6 = "cp-tuya-presence-type6-v128"
+
+-- TYPE6 communication watchdog fields. Never apply to the legacy ZG-204ZX.
+local TYPE6_LAST_RX = "type6.health.last_rx"
+local TYPE6_LAST_RX_SAVED = "type6.health.last_rx_saved"
+local TYPE6_MONITOR_STARTED = "type6.health.monitor_started"
+local TYPE6_LINK_STATE = "type6.health.link_state"
+local TYPE6_MONITOR_TIMER = "type6.health.timer"
+local TYPE6_LAST_PROBE = "type6.health.last_probe"
+local TYPE6_CHECK_INTERVAL = 60
+local TYPE6_QUERY_INTERVAL = 15 * 60
+
 
 local DP = {
   PRESENCE = 1,
@@ -68,6 +82,14 @@ local TYPE6_DP = {
   MOTION_SENSITIVITY = 123, -- Value
 }
 
+-- SmartThings get_field() may return *no values* for a missing field.
+-- Convert through a local variable so tonumber() always gets one argument.
+local function type6_number_field(device, key)
+  local value = device:get_field(key)
+  if value == nil then return nil end
+  return tonumber(value)
+end
+
 local function info_metadata()
   return {
     state_change = false,
@@ -77,6 +99,7 @@ end
 
 local function emit_driver_information(device)
   if driver_info == nil then return end
+  -- Author identity and health state must never share the same attribute.
   if driver_info.author ~= nil then
     device:emit_event(driver_info.author(DRIVER_AUTHOR, info_metadata()))
   end
@@ -139,7 +162,158 @@ local function write_enum(device, dp, value, label)
   tuya.send(device, dp, tuya.TYPE_ENUM, tuya.u8(value))
 end
 
-local function emit_type6_presence(device, active, source)
+local emit_type6_presence
+
+-- Store the last *received* Zigbee report. Outgoing reads/queries are never
+-- counted as proof of connectivity. The persisted copy is throttled to avoid
+-- excessive writes on frequent mmWave updates.
+-- SmartThings Status API contract for System Monitor:
+-- components.main[<user-namespace>.type6Communication]
+--   .linkState.value = checking | normal | suspect
+--   .minutesWithoutRx.value = integer (five-minute granularity)
+--   .lastReceived.value = UTC ISO-8601 or "없음"
+--   .timeoutMinutes.value = 15..360
+-- This is independent of the platform's ONLINE / OFFLINE device health.
+local TYPE6_STATUS_SLOT = "type6.health.published_slot"
+local TYPE6_LAST_RX_PUBLISHED = "type6.health.last_rx_published"
+
+local function type6_publish_link(device, force)
+  if not is_type6_device(device) or type6_link_capability == nil then return end
+  -- During a driver upgrade the hub can still have the old v125 profile.
+  -- Do not emit an unsupported capability before the new profile is applied.
+  if device.supports_capability_by_id ~= nil then
+    local checked, supported = pcall(device.supports_capability_by_id,
+      device, type6_link_capability.ID, "main")
+    if not checked or not supported then return end
+  end
+  local now = os.time()
+  local current = device:get_field(TYPE6_LINK_STATE)
+  local state = current == "suspect" and "suspect" or current == "ok" and "normal" or "checking"
+  local p = device.preferences or {}
+  local timeout = math.max(15, math.min(360, tonumber(p.type6CommTimeout) or 60))
+  local last = type6_number_field(device, TYPE6_LAST_RX) or type6_number_field(device, TYPE6_LAST_RX_SAVED)
+  local baseline = last or type6_number_field(device, TYPE6_MONITOR_STARTED) or now
+  local silence = math.max(0, now - baseline)
+  local slot = math.floor(silence / 300)
+  local function publish_if_changed(attr, value)
+    local attr_handle = type6_link_capability[attr]
+    if attr_handle == nil then return end
+    local previous = device:get_latest_state("main", type6_link_capability.ID, attr)
+    if force or previous ~= value then
+      device:emit_event(attr_handle(value))
+    end
+  end
+  publish_if_changed("linkState", state)
+  publish_if_changed("timeoutMinutes", timeout)
+  if force or device:get_field(TYPE6_STATUS_SLOT) ~= slot then
+    -- Do not write an event every 60 seconds; values are rounded down to 5min.
+    publish_if_changed("minutesWithoutRx", slot * 5)
+    device:set_field(TYPE6_STATUS_SLOT, slot)
+  end
+  local last_published = type6_number_field(device, TYPE6_LAST_RX_PUBLISHED)
+  if force or last_published == nil or
+    (last ~= nil and (last < last_published or last - last_published >= 300)) then
+    local iso = last and os.date("!%Y-%m-%dT%H:%M:%SZ", last) or "없음"
+    publish_if_changed("lastReceived", iso)
+    if last ~= nil then device:set_field(TYPE6_LAST_RX_PUBLISHED, last) end
+  end
+end
+
+-- Only genuine incoming reports count as proof of communication. Sending a
+-- query to a sleeping battery sensor is NOT a successful connectivity check.
+local function type6_record_rx(device, source)
+  if not is_type6_device(device) then return end
+  local now = os.time()
+  device:set_field(TYPE6_LAST_RX, now)
+  local persisted = type6_number_field(device, TYPE6_LAST_RX_SAVED) or 0
+  if now - persisted >= 300 or persisted > now then
+    device:set_field(TYPE6_LAST_RX_SAVED, now, {persist = true})
+  end
+  local previous = device:get_field(TYPE6_LINK_STATE)
+  device:set_field(TYPE6_LINK_STATE, "ok")
+  if previous ~= "ok" then
+    log.info(string.format("TYPE6 LINK recovered/confirmed: rx=%s, timestamp=%s", source, tostring(now)))
+  end
+  -- Publish only changed status or five-minute telemetry, so system monitor
+  -- can alert once on transition without noisy duplicate author events.
+  type6_publish_link(device, false)
+end
+
+local function type6_watchdog_tick(device)
+  if not is_type6_device(device) then return end
+  local now = os.time()
+  local last = type6_number_field(device, TYPE6_LAST_RX)
+    or type6_number_field(device, TYPE6_LAST_RX_SAVED)
+    or type6_number_field(device, TYPE6_MONITOR_STARTED)
+  if last == nil then
+    device:set_field(TYPE6_MONITOR_STARTED, now, {persist = true})
+    type6_publish_link(device, false)
+    return
+  end
+  local silence = math.max(0, now - last)
+  local preferences = device.preferences or {}
+  local minutes = math.max(15, math.min(360, tonumber(preferences.type6CommTimeout) or 60))
+  local timeout = minutes * 60
+  local previous = device:get_field(TYPE6_LINK_STATE)
+
+  if type6_query and silence >= timeout / 2 then
+    local last_probe = type6_number_field(device, TYPE6_LAST_PROBE) or 0
+    if last_probe == 0 or now - last_probe >= TYPE6_QUERY_INTERVAL or now < last_probe then
+      device:set_field(TYPE6_LAST_PROBE, now)
+      log.info(string.format("TYPE6 LINK probe: no RX for %d min; EF00 DataQuery (response not guaranteed)",
+        math.floor(silence / 60)))
+      type6_query(device)
+    end
+  end
+
+  if silence >= timeout and previous ~= "suspect" then
+    device:set_field(TYPE6_LINK_STATE, "suspect")
+    log.warn(string.format("TYPE6 LINK communication suspect: %d min without received Zigbee report (threshold %d min)",
+      math.floor(silence / 60), minutes))
+    if preferences.type6ClearOnTimeout ~= "OFF" then
+      local presence = device:get_latest_state("main", capabilities.presenceSensor.ID, "presence")
+      local motion = device:get_latest_state("main", capabilities.motionSensor.ID, "motion")
+      if presence ~= "not present" or motion ~= "inactive" then
+        emit_type6_presence(device, false, "communication_timeout")
+      end
+    end
+  end
+  type6_publish_link(device, false)
+end
+
+local function type6_start_watchdog(device)
+  if not is_type6_device(device) then return end
+  local existing = device:get_field(TYPE6_MONITOR_TIMER)
+  if existing then
+    device.thread:cancel_timer(existing)
+    device:set_field(TYPE6_MONITOR_TIMER, nil)
+  end
+  local saved_rx = type6_number_field(device, TYPE6_LAST_RX_SAVED)
+  local started = type6_number_field(device, TYPE6_MONITOR_STARTED)
+  if saved_rx == nil and started == nil then
+    device:set_field(TYPE6_MONITOR_STARTED, os.time(), {persist = true})
+  end
+  device:set_field(TYPE6_LAST_PROBE, nil)
+  device:set_field(TYPE6_STATUS_SLOT, nil)
+  -- Don't reset the last reception clock on restart, which would hide faults.
+  local timer = device.thread:call_on_schedule(TYPE6_CHECK_INTERVAL, function()
+    type6_watchdog_tick(device)
+  end, "type6-link-monitor")
+  device:set_field(TYPE6_MONITOR_TIMER, timer)
+  log.info("TYPE6 LINK watchdog started: 60s clock; default 60min timeout; low-rate queries")
+  type6_watchdog_tick(device)
+end
+
+local function type6_stop_watchdog(device)
+  if not is_type6_device(device) then return end
+  local timer = device:get_field(TYPE6_MONITOR_TIMER)
+  if timer then
+    device.thread:cancel_timer(timer)
+    device:set_field(TYPE6_MONITOR_TIMER, nil)
+  end
+end
+
+emit_type6_presence = function(device, active, source)
   device:emit_event(active and capabilities.presenceSensor.presence.present()
     or capabilities.presenceSensor.presence.not_present())
   -- TYPE6 does not independently classify stationary presence vs. movement.
@@ -235,6 +409,7 @@ local function log_and_apply_tuya_dp(device, dp, dp_type, data_len, value, raw_s
 end
 
 local function tuya_ef00_handler(driver, device, zb_rx)
+  if is_type6_device(device) then type6_record_rx(device, "EF00") end
   local zcl_body = zb_rx.body and zb_rx.body.zcl_body
   local body = zcl_body and zcl_body.body_bytes
 
@@ -352,6 +527,7 @@ end
 
 local function type6_zone_enroll_request(driver, device, zb_rx)
   if not is_type6_device(device) then return end
+  type6_record_rx(device, "IAS enroll")
   -- The outgoing command may be nested under commands.client or client.commands
   -- depending on the loaded Edge SDK. Never take down the whole driver if it
   -- is absent: TYPE6 can still report its occupancy through Tuya EF00 DP1.
@@ -384,6 +560,7 @@ end
 
 local function type6_zone_notification(driver, device, zb_rx)
   if not is_type6_device(device) then return end
+  type6_record_rx(device, "IAS notification")
   -- Parsed ZoneStatusChangeNotification is exposed as zb_rx.body.zone_status
   -- on some SDK builds; others put it in body.zcl_body.zone_status.
   local msg_body = zb_rx and zb_rx.body
@@ -405,6 +582,7 @@ end
 
 local function type6_zone_attribute(driver, device, value, zb_rx)
   if not is_type6_device(device) then return end
+  type6_record_rx(device, "IAS ZoneStatus attribute")
   type6_status_update(device, value and value.value, "attribute")
 end
 
@@ -415,7 +593,7 @@ local function type6_send_reads(device)
   end
 end
 
-local function type6_query(device)
+type6_query = function(device)
   log.info("TYPE6 SETTINGS QUERY: Tuya EF00 DataQuery 0x03")
   tuya.query_all(device)
 end
@@ -428,6 +606,7 @@ end
 local function added_handler(driver, device)
   if is_type6_device(device) then
     emit_type6_presence(device, false, "added")
+    type6_start_watchdog(device)
     emit_driver_information(device)
     type6_ias_enroll(driver, device)
     device.thread:call_with_delay(1.0, function() type6_read_and_query(device) end)
@@ -444,6 +623,8 @@ local function init_handler(driver, device)
   if is_type6_device(device) then
     log.info("TYPE6 initializing with profile " .. PROFILE_TYPE6)
     device:try_update_metadata({profile = PROFILE_TYPE6})
+    type6_start_watchdog(device)
+    device.thread:call_with_delay(3.0, function() type6_publish_link(device, true) end)
     emit_driver_information(device)
     type6_ias_enroll(driver, device)
     device.thread:call_with_delay(0.8, function() type6_read_and_query(device) end)
@@ -513,6 +694,7 @@ local function info_changed_handler(driver, device, event, args)
 local p = device.preferences or {}
 if is_type6_device(device) then
   type6_info_changed(device, old, p)
+  type6_watchdog_tick(device)
   emit_driver_information(device)
   return
 end
@@ -565,6 +747,7 @@ local function refresh_handler(driver, device, command)
   if is_type6_device(device) then
     log.info("TYPE6 Manual refresh requested")
     type6_read_and_query(device)
+    type6_publish_link(device, true)
     emit_driver_information(device)
     return
   end
@@ -572,6 +755,14 @@ local function refresh_handler(driver, device, command)
   send_reads(device)
   device.thread:call_with_delay(0.8, function() query_tuya_settings(device) end)
   emit_driver_information(device)
+end
+
+local function type6_battery_percentage_handler(driver, device, value, zb_rx)
+  if is_type6_device(device) then type6_record_rx(device, "BatteryPercentageRemaining") end
+  local raw = value and tonumber(value.value)
+  if raw and raw ~= 0xFF then
+    device:emit_event(capabilities.battery.battery(clamp(math.floor(raw / 2 + 0.5), 0, 100)))
+  end
 end
 
 local driver_template = {
@@ -589,12 +780,16 @@ local driver_template = {
   lifecycle_handlers = {
     added = added_handler,
     init = init_handler,
+    removed = function(driver, device) type6_stop_watchdog(device) end,
     doConfigure = do_configure_handler,
     infoChanged = info_changed_handler,
     driverSwitched = function(driver, device)
       if is_type6_device(device) then
         log.info("TYPE6 driver switched: selecting TYPE6 profile and re-enrolling IASZone")
         device:try_update_metadata({profile = PROFILE_TYPE6})
+        type6_start_watchdog(device)
+        device.thread:call_with_delay(3.0, function() type6_publish_link(device, true) end)
+        emit_driver_information(device)
         type6_ias_enroll(driver, device)
         device.thread:call_with_delay(1.0, function() type6_read_and_query(device) end)
       end
@@ -606,6 +801,11 @@ local driver_template = {
     }
   },
   zigbee_handlers = {
+    -- Include other real incoming Zigbee messages in the liveness clock;
+    -- this fallback runs only if no registered/default handler matched.
+    fallback = function(driver, device, zb_rx)
+      if is_type6_device(device) then type6_record_rx(device, "other Zigbee RX") end
+    end,
     attr = {
       [TemperatureMeasurement.ID] = {
         [TemperatureMeasurement.attributes.MeasuredValue.ID] = temperature_handler
@@ -621,6 +821,9 @@ local driver_template = {
       },
       [IASZone.ID] = {
         [IASZone.attributes.ZoneStatus.ID] = type6_zone_attribute
+      },
+      [PowerConfiguration.ID] = {
+        [PowerConfiguration.attributes.BatteryPercentageRemaining.ID] = type6_battery_percentage_handler
       }
     },
     cluster = {
@@ -635,6 +838,10 @@ local driver_template = {
     }
   }
 }
+
+if type6_link_capability ~= nil then
+  table.insert(driver_template.supported_capabilities, type6_link_capability)
+end
 
 defaults.register_for_default_handlers(driver_template, {
   capabilities.illuminanceMeasurement,

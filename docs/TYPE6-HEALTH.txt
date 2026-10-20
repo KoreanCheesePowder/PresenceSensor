@@ -1,0 +1,18 @@
+C.P Tuya Presence Sensor v1.3.1 - TYPE6 통신 상태
+
+제작자 정보: 치즈가루 (통신상태를 절대로 제작자 필드에 표시하지 않음)
+
+TYPE6 전용 '통신 상태' 커스텀 Capability:
+- linkState: checking / normal / suspect
+- lastReceived: 마지막 실제 Zigbee 수신 시각 (UTC)
+- minutesWithoutRx: 무수신 시간 (5분 단위 내림)
+- timeoutMinutes: 설정 무수신 판정 시간 (기본 60분)
+
+프로브: 기본 30분 이후 15분 간격 Tuya EF00 DataQuery.
+실제 Zigbee 수신이 있어야 정상 상태로 복구. 요청을 보냈다는 이유로 정상 처리하지 않음.
+
+모니터: 운영 웹 소스에 제공된 monitor/type6_monitor_adapter.py를 연결해야
+실제 웹 메뉴/알림/장애 기록에 통신 상태가 표시됨.
+새 포트, Webhook URL, PAT는 필요 없음. 기존 OAuth r:devices API로 조회.
+
+중요: 무수신은 공식 OFFLINE 확정이 아닌 통신 끊김 '의심'임.

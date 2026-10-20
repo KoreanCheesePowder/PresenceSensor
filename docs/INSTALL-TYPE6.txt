@@ -1,23 +1,11 @@
-C.P Tuya Presence Sensor v1.2.4 - TYPE6 설치 및 확인
+C.P Tuya Presence Sensor v1.3.1
 
-1. 이 ZIP을 압축 해제합니다.
-2. 기존과 동일한 채널/허브에 SETUP-AND-INSTALL.cmd를 실행하여 업데이트합니다.
-   (SmartThings CLI가 사전에 설치되어 있어야 합니다.)
-3. SmartThings 앱 > 실외기실 모션센서 > 더보기 > 드라이버 > 드라이버 변경
-   에서 C.P Tuya Presence Sensor를 선택합니다.
-   이미 등록된 기기를 삭제하거나 초기화하지 마세요.
-4. TYPE6의 프로필은 재실 감지, 움직임 감지, 배터리, 새로고침입니다.
-   온도/습도/조도는 없습니다.
-5. 재실센서 앞에서 움직여 '재실/동작 감지'가 변하는지 확인하고,
-   부재 전환 때 '부재/동작 없음'으로 돌아오는지 확인합니다.
-6. 설정에서 '재실 유지시간/감지거리/정적 민감도/동적 민감도/LED/간섭 방지'를
-   변경할 수 있습니다. 첫 설치 때 기본값을 임의로 기기에 다시 쓰지 않습니다.
-7. 이벤트가 동작하지 않으면 Hub Logcat에서 드라이버를 선택해
-   'TYPE6 EF00', 'TYPE6 IASZone', 'ZoneEnrollResponse' 로그를 확인합니다.
+1. Extract ZIP into a new folder.
+2. Run SETUP-AND-INSTALL.cmd.
+3. The CMD installer runs the existing driver update directly: no PowerShell or JSON parsing.
+4. All five sensors are retained; do not delete/re-add them.
+5. Verify app detail v1.3.1 and run SmartThings Edge logcat.
+6. Production System Monitor UI/alerts still require the operating monitor source ZIP.
 
-주의:
-- 기존 ZG-204ZX 기기의 프로필/설정을 수정하지 않았습니다.
-- TYPE6 모션 이벤트는 재실 여부와 같은 상태를 나타냅니다.
-- 실제 허브/센서 동작 검증은 설치 후에만 가능합니다.
-- 드라이버 변경에 나타나지 않으면 허브에 새 패키지가 설치되었는지
-  확인하고 앱을 재실행하세요. 초기화/삭제는 마지막 수단입니다.
+Manual alternative from a CMD window opened in the extracted driver directory:
+smartthings edge:drivers:package "." --install --channel cd373cad-c1db-4b2a-943b-6ed6fb51d2fa --hub c9e6b370-41a7-499a-ae95-3496747cd165

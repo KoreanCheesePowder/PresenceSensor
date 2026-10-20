@@ -3,7 +3,7 @@ zigbeeManufacturer:
     deviceLabel: C.P Tuya Presence Sensor TYPE6
     manufacturer: "_TZE200_ka8l86iu"
     model: "TS0601"
-    deviceProfileName: cp-tuya-presence-type6-v124
+    deviceProfileName: cp-tuya-presence-type6-v128
   - id: "HOBEIAN/ZG-204ZX"
     deviceLabel: C.P Tuya Presence Sensor
     manufacturer: HOBEIAN
